@@ -91,6 +91,7 @@ elif menu == "Forecast 5+7 Avanzado":
     if dict_hojas:
         df_base = dict_hojas[hoja_automatica].copy()
         
+        st.markdown("### 1. Parametrización del Modelo Predictivo")
         c1, c2, c3 = st.columns(3)
         with c1:
             X_meses = st.slider("Meses REALES (X):", 1, 11, 5)
@@ -103,12 +104,14 @@ elif menu == "Forecast 5+7 Avanzado":
         col_budget_fy = next((c for c in df_base.columns if "BUDGET FY" in str(c).upper() or ("BUDGET" in str(c).upper() and "BYTD" not in str(c).upper())), None)
         col_bytd = next((c for c in df_base.columns if "BYTD" in str(c).upper()), col_budget_fy)
                 
-        columnas_meses = detectar_columnas_meses(df_base)
+        columnas_meses =検出_columnas_meses = detectar_columnas_meses(df_base)
         
         if col_bytd and len(columnas_meses) == 12:
+            # Ejecución matemática básica para cálculo de factores
             df_factores = df_base.apply(aplicar_fit, axis=1, args=(alpha, delta, X_meses, col_bytd, columnas_meses))
             df_base = pd.concat([df_base, df_factores], axis=1)
             
+            # Construcción de las columnas de Panorama Final (Moneda real y valores numéricos limpios)
             columnas_panorama_final = []
             for idx, col_mes in enumerate(columnas_meses):
                 nombre_col_final = f"{col_mes} (Final)"
@@ -122,15 +125,57 @@ elif menu == "Forecast 5+7 Avanzado":
                     
                 columnas_panorama_final.append(nombre_col_final)
             
+            # --- NUEVA SECCIÓN: DASHBOARD CORPORATIVO ---
             st.markdown("---")
-            st.markdown("### Reporte de Panorama General Integrado (12 Meses)")
+            st.markdown("### 2. Dashboard Ejecutivo: Impacto sobre el Plan Anual Base")
+            
+            # Cálculo de agregados globales para las tarjetas de KPIs
+            total_planificado_budget = pd.to_numeric(df_base[col_budget_fy], errors='coerce').fillna(0).sum() if col_budget_fy else 0.0
+            
+            # Calculamos la suma total proyectada de los 12 meses consolidados
+            total_estimado_forecast = 0.0
+            for col_f in columnas_panorama_final:
+                total_estimado_forecast += df_base[col_f].sum()
+                
+            variacion_global = total_estimado_forecast - total_planificado_budget
+            
+            # Despliegue de tarjetas de métricas principales
+            kpi1, kpi2, kpi3 = st.columns(3)
+            with kpi1:
+                st.metric("Presupuesto Base Inicial (Budget FY)", f"USD {total_planificado_budget:,.2f}")
+            with kpi2:
+                st.metric("Estimación de Costo Anual (Forecast FIT)", f"USD {total_estimado_forecast:,.2f}")
+            with kpi3:
+                # El delta cambia de color automáticamente (positivo/rojo significa mayor costo, negativo/verde ahorro)
+                st.metric("Desviación Presupuestaria (Varianza Anual)", f"USD {variacion_global:,.2f}", 
+                          delta=f"{((variacion_global/total_planificado_budget)*100) if total_planificado_budget > 0 else 0:.2f}% de Desvío",
+                          delta_color="inverse")
+            
+            # Estructuración de datos agregados mes a mes para el gráfico comparativo
+            totales_mensuales_originales = [pd.to_numeric(df_base[m], errors='coerce').fillna(0).sum() for m in columnas_meses]
+            totales_mensuales_proyectados = [pd.to_numeric(df_f, errors='coerce').fillna(0).sum() for df_f in columnas_panorama_final]
+            
+            # Creamos un dataframe simplificado para alimentar el gráfico nativo de Streamlit
+            df_grafico = pd.DataFrame({
+                'Presupuesto Planificado (Original)': totales_mensuales_originales,
+                'Estimación Real + Proyectada (FIT)': totales_mensuales_proyectados
+            }, index=[str(m).split('-')[0].strip() for m in columnas_meses]) # Muestra el nombre limpio del mes (ej. Jan, Feb)
+            
+            # Despliegue del gráfico comparativo
+            st.write("**Análisis de Desviación Temporal por Período:**")
+            st.bar_chart(df_grafico, use_container_width=True)
+            
+            # --- FIN DEL DASHBOARD ---
+
+            st.markdown("---")
+            st.markdown("### 3. Reporte de Panorama General Integrado (12 Meses)")
             columnas_claves = ["Resp", "Desc Resp"] + columnas_panorama_final
             cols_existentes = [c for c in columnas_claves if c in df_base.columns]
             st.dataframe(df_base[cols_existentes], use_container_width=True)
             
+            # --- Módulo de Descarga Corporativa Limpia ---
             st.markdown("### 4. Exportación de Resultados (Matriz Ejecutiva)")
             
-            # --- 4.1 Descarga del Reporte Ejecutivo Principal ---
             df_descarga = df_base.copy()
             for col_mes in columnas_meses:
                 df_descarga[col_mes] = df_descarga[f"{col_mes} (Final)"]
@@ -170,12 +215,9 @@ elif menu == "Forecast 5+7 Avanzado":
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             
-            # --- 4.2 Descarga de la Matriz de Control (Factores FIT) ---
             with col_d2:
                 cols_factores_proyectados = [f"Factor_FIT_{m}" for m in columnas_meses[X_meses:]]
                 df_factores_export = df_base[cols_identificacion + cols_factores_proyectados].copy()
-                
-                # Renombramos las columnas de factores para que tengan una lectura ejecutiva
                 renombres_factores = {f"Factor_FIT_{m}": f"Índice_{m}" for m in columnas_meses[X_meses:]}
                 df_factores_export.rename(columns=renombres_factores, inplace=True)
                 
@@ -192,7 +234,7 @@ elif menu == "Forecast 5+7 Avanzado":
                     help="Descarga un reporte exclusivo con los factores de proyección para identificar áreas críticas."
                 )
             
-            st.caption("Izquierda: Reporte financiero con los costos proyectados. Derecha: Reporte operativo con los índices de ineficiencia calculados por el algoritmo para monitorear el rendimiento de los centros de costo.")
+            st.caption("Izquierda: Reporte financiero con los costos proyectados. Derecha: Reporte operativo con los índices de ineficiencia calculados por el algoritmo.")
             
             st.markdown("---")
             st.markdown("### 5. Auditoría de la Curva de Aprendizaje")
