@@ -109,7 +109,6 @@ elif menu == "Forecast 5+7 Avanzado":
             df_factores = df_base.apply(aplicar_fit, axis=1, args=(alpha, delta, X_meses, col_bytd, columnas_meses))
             df_base = pd.concat([df_base, df_factores], axis=1)
             
-            # --- Generación de columnas finales en la app ---
             columnas_panorama_final = []
             for idx, col_mes in enumerate(columnas_meses):
                 nombre_col_final = f"{col_mes} (Final)"
@@ -129,16 +128,13 @@ elif menu == "Forecast 5+7 Avanzado":
             cols_existentes = [c for c in columnas_claves if c in df_base.columns]
             st.dataframe(df_base[cols_existentes], use_container_width=True)
             
-            # --- NUEVA ARQUITECTURA: Módulo de Descarga Corporativa Limpia ---
             st.markdown("### 4. Exportación de Resultados (Matriz Ejecutiva)")
             
+            # --- 4.1 Descarga del Reporte Ejecutivo Principal ---
             df_descarga = df_base.copy()
-            
-            # 1. Sobreescribimos las 12 columnas originales de los meses con sus valores limpios finales
             for col_mes in columnas_meses:
                 df_descarga[col_mes] = df_descarga[f"{col_mes} (Final)"]
                 
-            # 2. Recálculo Dinámico de Métricas Clave
             df_descarga['YTD Calculado'] = df_descarga[columnas_meses[:X_meses]].sum(axis=1)
             df_descarga['Forecast FY Calculado'] = df_descarga[columnas_meses].sum(axis=1)
             
@@ -147,44 +143,60 @@ elif menu == "Forecast 5+7 Avanzado":
             else:
                 df_descarga['Var Calculado'] = 0
 
-            # 3. Limpieza: Aislamos únicamente lo que la gerencia debe ver
             idx_primer_mes = df_base.columns.get_loc(columnas_meses[0])
             cols_identificacion = list(df_base.columns[:idx_primer_mes])
-            # Evitar filtraciones de columnas internas
             cols_identificacion = [c for c in cols_identificacion if "Factor" not in str(c) and "(Final)" not in str(c)]
             
-            # Ensamblamos la tabla final en el orden perfecto
             columnas_limpias = cols_identificacion + columnas_meses + ['YTD Calculado', 'Forecast FY Calculado']
             if col_budget_fy: columnas_limpias.append(col_budget_fy)
             columnas_limpias.append('Var Calculado')
             if col_bytd: columnas_limpias.append(col_bytd)
 
             df_export = df_descarga[[c for c in columnas_limpias if c in df_descarga.columns]].copy()
+            df_export.rename(columns={'YTD Calculado': 'YTD', 'Forecast FY Calculado': 'Forecast FY', 'Var Calculado': 'Var'}, inplace=True)
             
-            # Renombramos las métricas de vuelta a sus nombres formales para el Excel
-            df_export.rename(columns={
-                'YTD Calculado': 'YTD',
-                'Forecast FY Calculado': 'Forecast FY',
-                'Var Calculado': 'Var'
-            }, inplace=True)
+            col_d1, col_d2 = st.columns(2)
             
-            # 4. Compilación del Excel en memoria RAM
-            buffer_excel = io.BytesIO()
-            with pd.ExcelWriter(buffer_excel, engine='openpyxl') as writer:
-                df_export.to_excel(writer, index=False, sheet_name='Forecast_Ejecutivo')
-            buffer_excel.seek(0)
+            with col_d1:
+                buffer_excel = io.BytesIO()
+                with pd.ExcelWriter(buffer_excel, engine='openpyxl') as writer:
+                    df_export.to_excel(writer, index=False, sheet_name='Forecast_Ejecutivo')
+                buffer_excel.seek(0)
+                
+                st.download_button(
+                    label="📥 Descargar Reporte Ejecutivo Limpio (.xlsx)",
+                    data=buffer_excel,
+                    file_name=f"Reporte_Forecast_Ejecutivo_{X_meses}mas{12-X_meses}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
             
-            st.download_button(
-                label="📥 Descargar Reporte Ejecutivo Limpio (.xlsx)",
-                data=buffer_excel,
-                file_name=f"Reporte_Forecast_Ejecutivo_{X_meses}mas{12-X_meses}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            st.caption("El archivo generado está optimizado. Contiene exclusivamente los datos de identificación, los 12 meses consolidados y las métricas YTD, Forecast FY y Varianza recalculadas dinámicamente según el modelo FIT.")
+            # --- 4.2 Descarga de la Matriz de Control (Factores FIT) ---
+            with col_d2:
+                cols_factores_proyectados = [f"Factor_FIT_{m}" for m in columnas_meses[X_meses:]]
+                df_factores_export = df_base[cols_identificacion + cols_factores_proyectados].copy()
+                
+                # Renombramos las columnas de factores para que tengan una lectura ejecutiva
+                renombres_factores = {f"Factor_FIT_{m}": f"Índice_{m}" for m in columnas_meses[X_meses:]}
+                df_factores_export.rename(columns=renombres_factores, inplace=True)
+                
+                buffer_factores = io.BytesIO()
+                with pd.ExcelWriter(buffer_factores, engine='openpyxl') as writer:
+                    df_factores_export.to_excel(writer, index=False, sheet_name='Matriz_Control_Factores')
+                buffer_factores.seek(0)
+                
+                st.download_button(
+                    label="🚨 Descargar Matriz de Control (Índices de Alerta)",
+                    data=buffer_factores,
+                    file_name=f"Matriz_Control_Factores_{X_meses}mas{12-X_meses}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    help="Descarga un reporte exclusivo con los factores de proyección para identificar áreas críticas."
+                )
+            
+            st.caption("Izquierda: Reporte financiero con los costos proyectados. Derecha: Reporte operativo con los índices de ineficiencia calculados por el algoritmo para monitorear el rendimiento de los centros de costo.")
             
             st.markdown("---")
             st.markdown("### 5. Auditoría de la Curva de Aprendizaje")
-            if st.checkbox("Ver evolución de los Factores Proyectados (FIT)"):
+            if st.checkbox("Ver evolución de los Factores Proyectados (FIT) en pantalla"):
                 cols_factores = ["Resp"] + [f"Factor_FIT_{m}" for m in columnas_meses[X_meses:]]
                 st.dataframe(df_base[cols_factores], use_container_width=True)
         else:
