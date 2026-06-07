@@ -151,16 +151,18 @@ elif menu == "Forecast 5+7 Avanzado":
                           delta=f"{((variacion_global/total_planificado_budget)*100) if total_planificado_budget > 0 else 0:.2f}% de Desvío",
                           delta_color="inverse")
             
-            # Estructuración de datos agregados mes a mes para el gráfico comparativo
+           # Estructuración de datos agregados mes a mes para el gráfico comparativo
             totales_mensuales_originales = [pd.to_numeric(df_base[m], errors='coerce').fillna(0).sum() for m in columnas_meses]
-            # CORRECCIÓN: Ahora apuntamos correctamente a df_base[col_f] en lugar de solo al texto col_f
             totales_mensuales_proyectados = [pd.to_numeric(df_base[col_f], errors='coerce').fillna(0).sum() for col_f in columnas_panorama_final]
+            
+            # CORRECCIÓN: Anteponemos el número del mes para forzar el orden cronológico en el gráfico
+            meses_ordenados = [f"{i+1:02d}. {str(m).split('-')[0].strip()}" for i, m in enumerate(columnas_meses)]
             
             # Creamos un dataframe simplificado para alimentar el gráfico nativo de Streamlit
             df_grafico = pd.DataFrame({
                 'Presupuesto Planificado (Original)': totales_mensuales_originales,
                 'Estimación Real + Proyectada (FIT)': totales_mensuales_proyectados
-            }, index=[str(m).split('-')[0].strip() for m in columnas_meses])
+            }, index=meses_ordenados)
             
             # Despliegue del gráfico comparativo
             st.write("**Análisis de Desviación Temporal por Período:**")
