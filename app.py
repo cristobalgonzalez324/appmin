@@ -24,33 +24,47 @@ def aplicar_fit_forecast(row, alpha, delta, x_meses, col_budget_fy, col_meses):
     try: budget_fy = float(row[col_budget_fy]) if pd.notna(row[col_budget_fy]) else 0.0
     except: budget_fy = 0.0
 
-    # REGLA DE SEGURIDAD 1: Si el presupuesto es cero o casi cero, no hay cálculo de ineficiencia posible.
+    # Si el presupuesto es cero o casi cero, no hay cálculo de ineficiencia posible.
     if budget_fy <= 0.01:
         return pd.Series({f"Factor_FIT_{col_meses[i]}": 1.0 for i in range(x_meses, 12)})
 
     presupuesto_medio_mensual = budget_fy / 12.0
     F, T, FIT = 0, 0, 0
 
+    # ENTRENAMIENTO HISTÓRICO
     for t in range(x_meses):
         try: actual = float(row[col_meses[t]]) if pd.notna(row[col_meses[t]]) else 0
         except: actual = 0
         
-        # REGLA DE SEGURIDAD 2: Outlier Capping. Evita divisiones por cero o crecimientos irreales.
+        # Ineficiencia pura del mes
         eficiencia_cruda = actual / presupuesto_medio_mensual
-        eficiencia = min(max(eficiencia_cruda, 0.0), 5.0) # Tope máximo de ineficiencia (500% del plan)
+        # Tope primario para evitar que ceros o errores del excel rompan la base
+        eficiencia = min(max(eficiencia_cruda, 0.1), 3.0) 
 
-        if t == 0: F, T = eficiencia, 0; FIT = F + T
+        if t == 0: 
+            F, T = eficiencia, 0
+            FIT = F + T
         else:
             F_nuevo = FIT + alpha * (eficiencia - FIT)
+            # REGLA 1: Acotamos el nivel base aprendido (entre 30% de ahorro y 250% de sobrecosto)
+            F_nuevo = min(max(F_nuevo, 0.3), 2.5) 
+            
             T_nuevo = T + delta * (F_nuevo - FIT)
+            # REGLA 2: Acotamos la tendencia para evitar explosión geométrica (max +- 5% de deriva mensual)
+            T_nuevo = min(max(T_nuevo, -0.05), 0.05) 
+            
             F, T = F_nuevo, T_nuevo
             FIT = F + T
 
+    # PROYECCIÓN FUTURA
     factores_futuros = {}
     for step, i in enumerate(range(x_meses, 12)):
+        # Proyectamos linealmente la base más la tendencia amortiguada
         factor_proyectado = F + (step + 1) * T
-        # REGLA DE SEGURIDAD 3: Límite superior del factor para evitar progresiones geométricas
-        factor_proyectado = min(max(0.0, factor_proyectado), 10.0) 
+        
+        # REGLA 3: Límite Corporativo Absoluto. El Forecast jamás será mayor al doble del presupuesto base.
+        factor_proyectado = min(max(factor_proyectado, 0.4), 2.0) 
+        
         factores_futuros[f"Factor_FIT_{col_meses[i]}"] = factor_proyectado
         
     return pd.Series(factores_futuros)
