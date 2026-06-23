@@ -21,9 +21,12 @@ def detectar_columnas_meses(df):
 
 # --- 2. MOTORES MATEMÁTICOS (FIT) ---
 def aplicar_fit_forecast(row, alpha, delta, x_meses, col_budget_fy, col_meses):
-    try: budget_fy = float(row[col_budget_fy]) if pd.notna(row[col_budget_fy]) else 0.0001
-    except: budget_fy = 0.0001
-    if budget_fy <= 0: budget_fy = 0.0001
+    try: budget_fy = float(row[col_budget_fy]) if pd.notna(row[col_budget_fy]) else 0.0
+    except: budget_fy = 0.0
+
+    # REGLA DE SEGURIDAD 1: Si el presupuesto es cero o casi cero, no hay cálculo de ineficiencia posible.
+    if budget_fy <= 0.01:
+        return pd.Series({f"Factor_FIT_{col_meses[i]}": 1.0 for i in range(x_meses, 12)})
 
     presupuesto_medio_mensual = budget_fy / 12.0
     F, T, FIT = 0, 0, 0
@@ -31,7 +34,10 @@ def aplicar_fit_forecast(row, alpha, delta, x_meses, col_budget_fy, col_meses):
     for t in range(x_meses):
         try: actual = float(row[col_meses[t]]) if pd.notna(row[col_meses[t]]) else 0
         except: actual = 0
-        eficiencia = actual / presupuesto_medio_mensual
+        
+        # REGLA DE SEGURIDAD 2: Outlier Capping. Evita divisiones por cero o crecimientos irreales.
+        eficiencia_cruda = actual / presupuesto_medio_mensual
+        eficiencia = min(max(eficiencia_cruda, 0.0), 5.0) # Tope máximo de ineficiencia (500% del plan)
 
         if t == 0: F, T = eficiencia, 0; FIT = F + T
         else:
@@ -40,7 +46,13 @@ def aplicar_fit_forecast(row, alpha, delta, x_meses, col_budget_fy, col_meses):
             F, T = F_nuevo, T_nuevo
             FIT = F + T
 
-    factores_futuros = {f"Factor_FIT_{col_meses[i]}": max(0, F + (step + 1) * T) for step, i in enumerate(range(x_meses, 12))}
+    factores_futuros = {}
+    for step, i in enumerate(range(x_meses, 12)):
+        factor_proyectado = F + (step + 1) * T
+        # REGLA DE SEGURIDAD 3: Límite superior del factor para evitar progresiones geométricas
+        factor_proyectado = min(max(0.0, factor_proyectado), 10.0) 
+        factores_futuros[f"Factor_FIT_{col_meses[i]}"] = factor_proyectado
+        
     return pd.Series(factores_futuros)
 
 def aplicar_fit_quinquenal(serie_historica, alpha, delta, meses_a_proyectar=60):
@@ -113,7 +125,6 @@ elif menu == "Forecast":
                 df_base[nombre_final] = val if idx < X_meses else val * df_base[f"Factor_FIT_{col_mes}"]
                 columnas_panorama.append(nombre_final)
                 
-            # RESTAURACIÓN DEL DASHBOARD DE FORECAST
             st.markdown("---")
             st.markdown("### 2. Dashboard Ejecutivo: Impacto sobre el Plan Anual Base")
             total_planificado = pd.to_numeric(df_base[col_budget_fy], errors='coerce').fillna(0).sum()
@@ -190,13 +201,11 @@ elif menu == "Budget Quinquenal":
                         df_resultado[fy_name] = df_resultado[cols_año].sum(axis=1)
                         cols_fy.append(fy_name)
                     
-                    # Guardamos la matriz completa en sesión para el análisis de sensibilidad
                     st.session_state['df_quinquenal'] = df_resultado
                     st.session_state['cols_2027'] = cols_2027
                     st.session_state['cols_fy'] = cols_fy
                     st.session_state['cols_id'] = cols_id[:5]
         
-        # --- SECCIÓN: ANÁLISIS DE SENSIBILIDAD ---
         if 'df_quinquenal' in st.session_state:
             df_q = st.session_state['df_quinquenal']
             cols_2027 = st.session_state['cols_2027']
@@ -209,13 +218,11 @@ elif menu == "Budget Quinquenal":
             
             st.markdown("---")
             st.markdown("### 2. Módulo de Sensibilidades")
-            st.write("Evalúa el impacto en la matriz quinquenal ante shocks macroeconómicos y operativos.")
             
             with st.expander("⚙️ Ponderación de Estructura de Costos de la Planta", expanded=False):
-                st.info("Dado que la base no desglosa el gasto por naturaleza, asigna el peso que cada variable tiene sobre el presupuesto total.")
                 s1, s2, s3 = st.columns(3)
                 peso_comb = s1.number_input("% Peso Combustible", 0, 100, 20)
-                peso_div = s2.number_input("% Peso Divisas (Equipos/Insumos)", 0, 100, 35)
+                peso_div = s2.number_input("% Peso Divisas", 0, 100, 35)
                 peso_mo = s3.number_input("% Peso Mano de Obra", 0, 100, 30)
             
             st.markdown("**Simulador de Variación de Mercado:**")
@@ -224,21 +231,16 @@ elif menu == "Budget Quinquenal":
             var_div = col_s2.slider("💱 Δ Divisas (%)", -50, 50, 0)
             var_mo = col_s3.slider("👷 Δ Mano de Obra (%)", -50, 50, 0)
             
-            # Cálculo del Impacto Total Global
             factor_impacto = 1 + ((peso_comb/100) * (var_comb/100)) + ((peso_div/100) * (var_div/100)) + ((peso_mo/100) * (var_mo/100))
             
-            # Aplicación de sensibilidad
             df_sensibilizado = df_q.copy()
             for col in cols_2027 + cols_fy:
                 df_sensibilizado[col] = df_sensibilizado[col] * factor_impacto
                 
             st.markdown("### 3. Dashboard de Sensibilidad (Impacto en FY)")
-            
-            # Extracción de totales para el gráfico
             totales_base = [df_q[fy].sum() for fy in cols_fy]
             totales_sens = [df_sensibilizado[fy].sum() for fy in cols_fy]
             
-            # KPIs Quinquenales
             suma_quinquenio_base = sum(totales_base)
             suma_quinquenio_sens = sum(totales_sens)
             impacto_neto = suma_quinquenio_sens - suma_quinquenio_base
@@ -249,7 +251,7 @@ elif menu == "Budget Quinquenal":
             k3.metric("Impacto Neto Quinquenal", f"USD {impacto_neto:,.0f}", delta=f"{(impacto_neto/suma_quinquenio_base)*100 if suma_quinquenio_base>0 else 0:.2f}%", delta_color="inverse")
             
             df_graf_q = pd.DataFrame({
-                'Proyección Base (Escenario Normal)': totales_base,
+                'Proyección Base': totales_base,
                 'Proyección Sensibilizada': totales_sens
             }, index=[fy.replace("FY ", "") for fy in cols_fy])
             st.bar_chart(df_graf_q, use_container_width=True)
