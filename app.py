@@ -89,7 +89,7 @@ def aplicar_fit_quinquenal(serie_historica, alpha, delta, meses_a_proyectar=60):
     return [max(0, F + step * T) for step in range(1, meses_a_proyectar + 1)]
 
 # --- 3. MOTOR DE EXPORTACIÓN (WORD) ---
-def generar_reporte_word(titulo, kpis, parametros, conclusiones, insight_dinamico=None, desglose_anual=None):
+def generar_reporte_word(titulo, kpis, parametros, conclusiones, insight_origen=None, insight_costo=None, desglose_anual=None):
     doc = Document()
     titulo_doc = doc.add_heading(f'Informe Técnico: {titulo}', 0)
     titulo_doc.alignment = 1 
@@ -124,10 +124,16 @@ def generar_reporte_word(titulo, kpis, parametros, conclusiones, insight_dinamic
     for key, value in parametros.items():
         doc.add_paragraph(f'{key}: {value}', style='List Bullet')
         
-    if insight_dinamico:
+    # --- AQUI ESTÁ LA MEJORA DEL FORMATO ---
+    if insight_origen and insight_costo:
         doc.add_heading('4. Insight Estratégico (Hallazgo de Origen de Costos)', level=1)
+        doc.add_paragraph('El análisis revela que la partida con mayor impacto en la estructura de costos estimada para el periodo 2027-2031 corresponde a:')
+        
+        for detalle in insight_origen:
+            doc.add_paragraph(detalle, style='List Bullet')
+            
         p = doc.add_paragraph()
-        p.add_run(insight_dinamico).bold = True
+        p.add_run(f'\nEste ítem concentrará un costo total proyectado de USD {insight_costo:,.2f} durante los próximos 5 años, representando el principal foco de atención para las estrategias de contención de presupuesto.').bold = True
         
     doc.add_heading('5. Metodología Aplicada', level=1)
     doc.add_paragraph(conclusiones)
@@ -320,17 +326,13 @@ elif menu == "Budget Quinquenal":
             buffer_q.seek(0)
             col_d1.download_button("📊 Descargar Matriz Quinquenal", buffer_q, "Budget_Quinquenal.xlsx")
             
-            # --- PREPARACIÓN DEL INSIGHT DINÁMICO ---
-            # Sumamos los totales de los 5 años por fila para encontrar el responsable mayoritario
+            # --- PREPARACIÓN DEL INSIGHT DINÁMICO EN LISTA ---
             df_sensibilizado['Total_Quinquenio'] = df_sensibilizado[c_fy].sum(axis=1)
             idx_max_costo = df_sensibilizado['Total_Quinquenio'].idxmax()
             fila_max_costo = df_sensibilizado.loc[idx_max_costo]
             
             detalles_origen = [f"{col}: {fila_max_costo[col]}" for col in c_id if pd.notna(fila_max_costo[col])]
-            origen_str = " | ".join(detalles_origen)
             costo_max_fila = fila_max_costo['Total_Quinquenio']
-            
-            insight_txt = f"El análisis revela que la partida con mayor impacto en la estructura de costos estimada para el periodo 2027-2031 corresponde a:\n\n👉 {origen_str}\n\nEste ítem concentrará un costo total proyectado de USD {costo_max_fila:,.2f} durante los próximos 5 años, representando el principal foco de atención para las estrategias de contención de presupuesto."
             
             # --- PREPARACIÓN DEL DESGLOSE ANUAL ---
             desglose_yoy = {fy.replace("FY ", ""): total for fy, total in zip(c_fy, totales_sens)}
@@ -338,5 +340,14 @@ elif menu == "Budget Quinquenal":
             kpis_q = {"Proyección Estructural Base (5 años)": f"USD {suma_base:,.2f}", "Proyección tras Shocks de Mercado": f"USD {suma_sens:,.2f}", "Varianza Quinquenal": f"USD {impacto_neto:,.2f} ({porc_impacto:.2f}%)"}
             params_q = {"Alpha": alpha_q, "Delta": delta_q, "Combustible": f"Peso {peso_comb}% | Var {var_comb}%", "Divisas": f"Peso {peso_div}% | Var {var_div}%", "MO": f"Peso {peso_mo}% | Var {var_mo}%"}
             
-            buffer_word_q = generar_reporte_word("Planificación Estratégica Quinquenal (2027-2031)", kpis_q, params_q, "Modelo FIT ejecutado sobre series de tiempo históricas.", insight_dinamico=insight_txt, desglose_anual=desglose_yoy)
+            # Reemplazamos la cadena plana por las listas de origen y costo
+            buffer_word_q = generar_reporte_word(
+                "Planificación Estratégica Quinquenal (2027-2031)", 
+                kpis_q, 
+                params_q, 
+                "Modelo FIT ejecutado sobre series de tiempo históricas.", 
+                insight_origen=detalles_origen, 
+                insight_costo=costo_max_fila, 
+                desglose_anual=desglose_yoy
+            )
             col_d2.download_button("📄 Descargar Informe Técnico", buffer_word_q, "Informe_Quinquenal.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
