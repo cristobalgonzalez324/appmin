@@ -7,9 +7,29 @@ from docx.shared import Pt
 
 st.set_page_config(page_title="Gestión Minera Avanzada", layout="wide")
 
-# --- 1. GESTIÓN DE ESTADO ---
+# --- 1. GESTIÓN DE ESTADO Y AUTO-CARGA DE DATOS ---
+@st.cache_data
+def cargar_datos_por_defecto():
+    ruta_base = os.getcwd()
+    dict_archivos = {}
+    for root, dirs, files in os.walk(ruta_base):
+        if '.git' in root: continue
+        for f in files:
+            if (f.endswith('.xlsx') or f.endswith('.xls')) and not f.startswith('~$'):
+                archivo_encontrado = os.path.join(root, f)
+                try:
+                    dict_hojas = pd.read_excel(archivo_encontrado, sheet_name=None)
+                    for nombre_hoja, df in dict_hojas.items():
+                        if not df.empty and any("Unnamed:" in str(col) for col in df.columns):
+                            df.columns = df.iloc[0].astype(str).str.strip()
+                            df = df.iloc[1:].reset_index(drop=True)
+                        dict_hojas[nombre_hoja] = df
+                    dict_archivos[f] = dict_hojas
+                except: pass
+    return dict_archivos
+
 if 'bases_datos' not in st.session_state:
-    st.session_state['bases_datos'] = {}
+    st.session_state['bases_datos'] = cargar_datos_por_defecto()
 
 def detectar_columnas_meses(df):
     prefijos = [("jan", "ene"), ("feb", "feb"), ("mar", "mar"), ("apr", "abr"), 
@@ -68,8 +88,8 @@ def aplicar_fit_quinquenal(serie_historica, alpha, delta, meses_a_proyectar=60):
         FIT = F + T
     return [max(0, F + step * T) for step in range(1, meses_a_proyectar + 1)]
 
-# --- 3. MOTOR DE EXPORTACIÓN (WORD) MEJORADO ---
-def generar_reporte_word(titulo, kpis, parametros, conclusiones, insight_dinamico=None):
+# --- 3. MOTOR DE EXPORTACIÓN (WORD) ---
+def generar_reporte_word(titulo, kpis, parametros, conclusiones, insight_dinamico=None, desglose_anual=None):
     doc = Document()
     titulo_doc = doc.add_heading(f'Informe Técnico: {titulo}', 0)
     titulo_doc.alignment = 1 
@@ -77,7 +97,6 @@ def generar_reporte_word(titulo, kpis, parametros, conclusiones, insight_dinamic
     doc.add_paragraph('Generado por: Sistema Predictivo de Gestión Minera Avanzada').alignment = 1
     doc.add_paragraph('_' * 70).alignment = 1
     
-    # Tabla elegante para KPIs
     doc.add_heading('1. Resumen Ejecutivo (Métricas Clave)', level=1)
     table = doc.add_table(rows=1, cols=2)
     table.style = 'Table Grid' 
@@ -89,18 +108,29 @@ def generar_reporte_word(titulo, kpis, parametros, conclusiones, insight_dinamic
         row_cells[0].text = key
         row_cells[1].text = str(value)
         
-    doc.add_heading('2. Parametrización del Modelo', level=1)
+    if desglose_anual:
+        doc.add_heading('2. Desglose Anual Proyectado (USD)', level=1)
+        t_anual = doc.add_table(rows=1, cols=2)
+        t_anual.style = 'Table Grid'
+        hc = t_anual.rows[0].cells
+        hc[0].text = 'Año Fiscal'
+        hc[1].text = 'Costo Total Estimado'
+        for año, valor in desglose_anual.items():
+            rc = t_anual.add_row().cells
+            rc[0].text = str(año)
+            rc[1].text = f"USD {valor:,.2f}"
+
+    doc.add_heading('3. Parametrización del Modelo', level=1)
     for key, value in parametros.items():
         doc.add_paragraph(f'{key}: {value}', style='List Bullet')
         
-    doc.add_heading('3. Metodología Aplicada', level=1)
-    doc.add_paragraph(conclusiones)
-    
-    # Módulo exclusivo de inteligencia de negocios
     if insight_dinamico:
-        doc.add_heading('4. Insight Estratégico (Hallazgo Automático)', level=1)
+        doc.add_heading('4. Insight Estratégico (Hallazgo de Origen de Costos)', level=1)
         p = doc.add_paragraph()
         p.add_run(insight_dinamico).bold = True
+        
+    doc.add_heading('5. Metodología Aplicada', level=1)
+    doc.add_paragraph(conclusiones)
 
     buffer = io.BytesIO()
     doc.save(buffer)
@@ -113,7 +143,8 @@ menu = st.sidebar.radio("Módulos del Sistema:", ("Gestión de Datos", "Forecast
 
 if menu == "Gestión de Datos":
     st.title("📂 Repositorio Central")
-    archivo_subido = st.file_uploader("Subir base de datos (.xlsx)", type=["xlsx", "xls"])
+    st.write("Los archivos locales han sido precargados automáticamente para agilizar la operación.")
+    archivo_subido = st.file_uploader("Subir base de datos adicional (.xlsx)", type=["xlsx", "xls"])
     if archivo_subido:
         try:
             dict_hojas = pd.read_excel(archivo_subido, sheet_name=None)
@@ -123,7 +154,7 @@ if menu == "Gestión de Datos":
                     df = df.iloc[1:].reset_index(drop=True)
                 dict_hojas[n] = df
             st.session_state['bases_datos'][archivo_subido.name] = dict_hojas
-            st.success("Archivo procesado.")
+            st.success("Archivo procesado y añadido a la memoria.")
         except Exception as e: st.error(f"Error: {e}")
 
     if st.session_state['bases_datos']:
@@ -172,7 +203,7 @@ elif menu == "Forecast":
             k3.metric("Varianza", f"USD {variacion:,.0f}", f"{porcentaje_var:.2f}%", delta_color="inverse")
             
             df_grafico = pd.DataFrame({'Original': [pd.to_numeric(df_base[m], errors='coerce').fillna(0).sum() for m in columnas_meses], 'Proyectado': [df_base[c].sum() for c in columnas_panorama]}, index=[f"{i+1:02d}. {str(m).split('-')[0].strip()}" for i, m in enumerate(columnas_meses)])
-            st.line_chart(df_grafico, use_container_width=True) # Gráfico cambiado a Líneas
+            st.line_chart(df_grafico, use_container_width=True)
 
             st.markdown("### Matriz de Estimaciones")
             cols_id = [c for c in df_base.columns if c not in columnas_meses and "Factor" not in c and "(Final)" not in c]
@@ -260,7 +291,6 @@ elif menu == "Budget Quinquenal":
             var_div = col_s2.slider("💱 Δ Divisas (%)", -50, 50, 0)
             var_mo = col_s3.slider("👷 Δ Mano de Obra (%)", -50, 50, 0)
             
-            # Matemáticas de impacto
             factor_impacto = 1 + ((peso_comb/100) * (var_comb/100)) + ((peso_div/100) * (var_div/100)) + ((peso_mo/100) * (var_mo/100))
             df_sensibilizado = df_q.copy()
             for col in c_27 + c_fy: df_sensibilizado[col] = df_sensibilizado[col] * factor_impacto
@@ -277,11 +307,9 @@ elif menu == "Budget Quinquenal":
             k2.metric("Costo Quinquenio (Sensibilizado)", f"USD {suma_sens:,.0f}")
             k3.metric("Impacto Neto (Brecha)", f"USD {impacto_neto:,.0f}", f"{porc_impacto:.2f}%", delta_color="inverse")
             
-            # GRÁFICO DE LÍNEAS PARA TENDENCIA A 5 AÑOS
             df_graf_q = pd.DataFrame({'Escenario Base': totales_base, 'Escenario Sensibilizado': totales_sens}, index=[fy.replace("FY ", "") for fy in c_fy])
             st.line_chart(df_graf_q, use_container_width=True)
 
-            # MATRIZ VISIBLE A PETICIÓN
             st.markdown("### Matriz de Estimaciones Quinquenales")
             st.dataframe(df_sensibilizado[c_id + c_27 + c_fy], use_container_width=True)
 
@@ -292,15 +320,23 @@ elif menu == "Budget Quinquenal":
             buffer_q.seek(0)
             col_d1.download_button("📊 Descargar Matriz Quinquenal", buffer_q, "Budget_Quinquenal.xlsx")
             
-            # CÁLCULO DE INSIGHT DINÁMICO PARA WORD
-            impactos = {"Combustible": abs((peso_comb/100)*(var_comb/100)), "Divisas": abs((peso_div/100)*(var_div/100)), "Mano de Obra": abs((peso_mo/100)*(var_mo/100))}
-            mayor_impacto = max(impactos, key=impactos.get)
-            if impactos[mayor_impacto] > 0:
-                insight_txt = f"💡 ALERTA ESTRATÉGICA: La variable macroeconómica con mayor impacto en la desviación de este presupuesto es '{mayor_impacto}'. Esto se debe a su alta ponderación en la estructura de costos combinada con la magnitud del shock simulado. Se recomienda focalizar políticas de cobertura (hedging) en este ítem."
-            else:
-                insight_txt = "💡 El escenario quinquenal se mantiene en su tendencia natural. No se registran perturbaciones o shocks macroeconómicos activos en la simulación actual."
+            # --- PREPARACIÓN DEL INSIGHT DINÁMICO ---
+            # Sumamos los totales de los 5 años por fila para encontrar el responsable mayoritario
+            df_sensibilizado['Total_Quinquenio'] = df_sensibilizado[c_fy].sum(axis=1)
+            idx_max_costo = df_sensibilizado['Total_Quinquenio'].idxmax()
+            fila_max_costo = df_sensibilizado.loc[idx_max_costo]
+            
+            detalles_origen = [f"{col}: {fila_max_costo[col]}" for col in c_id if pd.notna(fila_max_costo[col])]
+            origen_str = " | ".join(detalles_origen)
+            costo_max_fila = fila_max_costo['Total_Quinquenio']
+            
+            insight_txt = f"El análisis revela que la partida con mayor impacto en la estructura de costos estimada para el periodo 2027-2031 corresponde a:\n\n👉 {origen_str}\n\nEste ítem concentrará un costo total proyectado de USD {costo_max_fila:,.2f} durante los próximos 5 años, representando el principal foco de atención para las estrategias de contención de presupuesto."
+            
+            # --- PREPARACIÓN DEL DESGLOSE ANUAL ---
+            desglose_yoy = {fy.replace("FY ", ""): total for fy, total in zip(c_fy, totales_sens)}
 
-            kpis_q = {"Proyección Base (5 años)": f"USD {suma_base:,.2f}", "Proyección Sensibilizada": f"USD {suma_sens:,.2f}", "Impacto Neto Absoluto": f"USD {impacto_neto:,.2f} ({porc_impacto:.2f}%)"}
+            kpis_q = {"Proyección Estructural Base (5 años)": f"USD {suma_base:,.2f}", "Proyección tras Shocks de Mercado": f"USD {suma_sens:,.2f}", "Varianza Quinquenal": f"USD {impacto_neto:,.2f} ({porc_impacto:.2f}%)"}
             params_q = {"Alpha": alpha_q, "Delta": delta_q, "Combustible": f"Peso {peso_comb}% | Var {var_comb}%", "Divisas": f"Peso {peso_div}% | Var {var_div}%", "MO": f"Peso {peso_mo}% | Var {var_mo}%"}
-            buffer_word_q = generar_reporte_word("Presupuesto Quinquenal 2027-2031", kpis_q, params_q, "Generación mediante modelo FIT y ponderación macroeconómica.", insight_txt)
+            
+            buffer_word_q = generar_reporte_word("Planificación Estratégica Quinquenal (2027-2031)", kpis_q, params_q, "Modelo FIT ejecutado sobre series de tiempo históricas.", insight_dinamico=insight_txt, desglose_anual=desglose_yoy)
             col_d2.download_button("📄 Descargar Informe Técnico", buffer_word_q, "Informe_Quinquenal.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
